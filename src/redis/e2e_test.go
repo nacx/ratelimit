@@ -238,3 +238,22 @@ func TestServiceFailsFastWhenRedisStopsAnswering(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceReturnsAtRequestDeadline(t *testing.T) {
+	srv := redis.NewFakeRedisForTest(t)
+	// The I/O timeout is far away: only the request deadline can end calls.
+	svc := startService(t, &srv, nil, func(s *settings.Settings) { s.RedisTimeout = time.Minute })
+
+	srv.SetBlackhole(true)
+	const calls = 50
+	_, errs := svc.callConcurrently("minute", calls, 50*time.Millisecond)
+	for _, err := range errs {
+		assert.Error(t, err)
+	}
+	// The client gives up at its deadline whatever the server does. The
+	// server must give up too, instead of keeping the calls blocked on Redis:
+	// each call it gives up on is answered with a Redis error.
+	assert.Eventually(t, func() bool {
+		return svc.counter("ratelimit.service.call.should_rate_limit.redis_error") == calls
+	}, time.Second, 10*time.Millisecond)
+}
